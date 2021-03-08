@@ -2,7 +2,7 @@ from flask import Flask
 
 # cohort layer for two-phase commit
 app = Flask(__name__)
-
+app.config.from_pyfile("config.py")
 
 @app.route('/')
 def hello_world():
