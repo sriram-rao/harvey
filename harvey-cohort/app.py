@@ -11,38 +11,38 @@ repo = PostgresRepo(app.config.get('POSTGRES_PORT'))
 
 @app.route('/')
 def hello_world():
-    repo.log("test", "hello")
-    return {'response': 'Hello World!'}
+    return {'response': 'Welcome to the Harvey Dent commit protocol!'}
 
 
-@app.route('/observe')
+@app.route('/observe', methods=['GET', 'POST'])
 def insert_observation():
-    query = request.args.get('query')
-    return {'response': query}
-
-
-@app.route('/prepare/<transaction>')
-def prepare(transaction: string):
-    repo.log(transaction, "prepare")
-    if not repo.prepare_commit(transaction):
+    params = request.get_json()
+    sensor_type = params['type']
+    data = params['data']
+    try:
+        repo.log(params['transaction'], "prepare")
+        repo.observe(sensor_type, params['transaction'], data)
+        return {'result': 'yes'}
+    except Exception:
         return {'result': 'no'}
-    return {'result': 'yes'}
 
 
 @app.route('/commit/<transaction>')
 def commit(transaction: string):
+    repo.commit_prepared()
     repo.log(transaction, "commit")
-    repo.commit_prepared(transaction)
     return {'result': 'success'}
 
 
 @app.route('/abort/<transaction>')
 def abort(transaction: string):
+    repo.abort_prepared()
     repo.log(transaction, "abort")
-    repo.abort_prepared(transaction)
     return {'result': 'success'}
 
 
 if __name__ == '__main__':
     # add recovery tasks
+    # transaction_id = repo.get_transaction_id(transaction)
+    # repo.recover_commit_prepared(transaction)
     app.run()
