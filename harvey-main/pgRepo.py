@@ -47,5 +47,5 @@ class PostgresRepo:
 
     def remove_log(self, transaction: string, cohort: int, event: string) -> bool:
         command = f"DELETE FROM transactionlog WHERE transaction = '{transaction}' " \
-                  f"AND cohort = {cohort} AND event = '{event}'"
+                  f"AND cohort = {cohort} AND message = '{event}'"
         return self.execute(command) > 0

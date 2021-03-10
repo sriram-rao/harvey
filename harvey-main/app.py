@@ -2,7 +2,7 @@ import datetime
 import string
 
 import requests
-from flask import Flask, request, g as global_data
+from flask import Flask, request
 
 from pgRepo import PostgresRepo
 
@@ -10,13 +10,22 @@ from pgRepo import PostgresRepo
 
 app = Flask(__name__)
 app.config.from_pyfile("config.py")
-global_data.transaction_batch = app.config.get('BATCH_SIZE')
-global_data.active_count = 0
-global_data.active_transactions = dict()
-global_data.transaction_name = ''
 
 repo = PostgresRepo(app.config.get('POSTGRES_PORT'))
 cohort_ports = list(app.config.get('COHORT_PORTS'))
+
+
+class Context:
+    active_count = 0
+    transaction_name = ''
+    active_transactions = {}
+    transaction_batch = app.config.get('BATCH_SIZE')
+
+    @staticmethod
+    def clear_context():
+        Context.active_transactions = {}
+        Context.active_count = 0
+        Context.transaction_name = ''
 
 
 @app.route('/')
@@ -29,27 +38,29 @@ def insert_observation():
     params = request.get_json()
     data = params['data']
     cohort = cohort_ports[get_hash(data['sensor_id'], data['timeStamp']) % len(cohort_ports)]
-    to_abort = False
 
-    if global_data.active_count == 0:
-        global_data.transaction_name = 'trx' + str(cohort)
+    if Context.active_count == 0:
+        Context.transaction_name = 'trx'
 
-    if cohort not in global_data.active_transactions:
-        global_data.active_transactions[cohort] = []
-    global_data.active_transactions[cohort].append(data)
-    global_data.active_count += 1
+    if cohort not in Context.active_transactions:
+        Context.active_transactions[cohort] = []
+    Context.active_transactions[cohort].append(data)
+    Context.active_count += 1
 
-    if global_data.active_count < 10:
+    if Context.active_count < Context.transaction_batch:
         return {'result': 'success'}
 
-    if global_data.active_count > global_data.transaction_batch:
-        if not prepare():
-            to_abort = True
+    result = 'abort'
+    try:
+        if prepare():
+            commit()
+            result = 'commit'
+        else:
             abort()
-        commit()
-        clear_global_state()
-
-    return {'result': f"{'abort' if to_abort else 'success'}"}
+            result = 'abort'
+    finally:
+        Context.clear_context()
+        return {'result': f"'{result}'"}
 
 
 @app.route('/status/<transaction>')
@@ -71,23 +82,25 @@ def begin_transaction(cohort: int, transaction: string):
 
 def post_data(port: int, data: dict) -> bool:
     url = f"http://localhost:{port}/observe"
-    response = requests.post(url, data=data)
+    response = requests.post(url, json=data)
     return response.json()['result'] == 'success'
 
 
 def prepare() -> bool:
     for cohort in cohort_ports:
-        data = global_data.active_transactions[cohort]
+        data = {"type": "temperature", "transaction": Context.transaction_name,
+                "data": Context.active_transactions[cohort]}
         url = f"http://localhost:{cohort}/observe"
-        response = requests.post(url, data=data)
+        response = requests.post(url, json=data, headers={'Accept': 'application/json',
+                                                          'Content-Type': 'application/json'})
         if response.json()['result'] == 'no':
             return False
-        repo.log(global_data.transaction_name, cohort, 'prepared')
+        repo.log(Context.transaction_name, cohort, 'prepared')
     return True
 
 
 def abort() -> bool:
-    transaction = global_data.transaction_name
+    transaction = Context.transaction_name
     responses = {}
     for cohort in cohort_ports:
         repo.log(transaction, cohort, 'abort')
@@ -99,7 +112,7 @@ def abort() -> bool:
 
 
 def commit() -> bool:
-    transaction = global_data.transaction_name
+    transaction = Context.transaction_name
     responses = {}
     for cohort in cohort_ports:
         repo.log(transaction, cohort, 'commit')
@@ -108,12 +121,6 @@ def commit() -> bool:
         responses[cohort] = requests.get(url)
         repo.remove_log(transaction, cohort, 'commit')
     return True
-
-
-def clear_global_state():
-    global_data.active_transactions = {}
-    global_data.active_count = 0
-    global_data.transaction_name = ''
 
 
 if __name__ == '__main__':
