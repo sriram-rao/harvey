@@ -1,19 +1,26 @@
 import datetime
-import string
-
 import requests
 from flask import Flask, request
-
 from pgRepo import PostgresRepo
+import string
+import uuid
 
 # coordinator for two-phase commit
+
+def recover():
+    transaction, status = repo.get_last_status()
+    Context.transaction_name = transaction
+    action = 'commit' if status == 'to-commit' else 'abort'
+    if complete_transaction(action):
+        repo.log(Context.transaction_name, 0, 'complete')
+    Context.clear()
 
 app = Flask(__name__)
 app.config.from_pyfile("config.py")
 
 repo = PostgresRepo(app.config.get('POSTGRES_PORT'))
 cohort_ports = list(app.config.get('COHORT_PORTS'))
-
+recover()
 
 class Context:
     active_count = 0
@@ -22,7 +29,7 @@ class Context:
     transaction_batch = app.config.get('BATCH_SIZE')
 
     @staticmethod
-    def clear_context():
+    def clear():
         Context.active_transactions = {}
         Context.active_count = 0
         Context.transaction_name = ''
@@ -40,7 +47,7 @@ def insert_observation():
     cohort = cohort_ports[get_hash(data['sensor_id'], data['timeStamp']) % len(cohort_ports)]
 
     if Context.active_count == 0:
-        Context.transaction_name = 'trx'
+        Context.transaction_name = f"trx-{uuid.uuid4()}"
 
     if cohort not in Context.active_transactions:
         Context.active_transactions[cohort] = []
@@ -50,32 +57,35 @@ def insert_observation():
     if Context.active_count < Context.transaction_batch:
         return {'result': 'success'}
 
-    result = 'abort'
-    try:
-        if prepare():
-            commit()
-            result = 'commit'
-        else:
-            abort()
-            result = 'abort'
-    finally:
-        Context.clear_context()
-        return {'result': f"'{result}'"}
+    action = 'commit' if prepare() else 'abort'
+    result = action if complete_transaction(action) else 'incomplete'
+    repo.log(Context.transaction_name, 0, 'complete')
+    Context.clear()
+    return {'result': f"{result}"}
 
 
-@app.route('/status/<transaction>')
-def get_status(transaction: string):
-    # get status from protocol table and return
-    pass
+@app.route('/status/<name>/<cohort>')
+def get_status(name: string, cohort: int):
+    return {'status': f"{repo.get_status(name, cohort)}"}
 
+
+@app.route('/register')
+def register_status():
+    cohort = request.args.get('cohort')
+    name = request.args.get('name')
+    action = request.args.get('action')
+    repo.remove_log(name, cohort, action)
+    if repo.is_complete(name):
+        repo.log(name, 0, 'complete')
+    return {'result': 'success'}
 
 def get_hash(sensor: string, time: datetime) -> int:
     hash_string = f"{sensor}_{time}"
     return hash_string.__hash__()
 
 
-def begin_transaction(cohort: int, transaction: string):
-    url = f"http://localhost:{cohort}/begin/{transaction}"
+def begin_transaction(cohort: int, name: string):
+    url = f"http://localhost:{cohort}/begin/{name}"
     response = requests.get(url)
     return response.json()['result'] == 'success'
 
@@ -87,42 +97,40 @@ def post_data(port: int, data: dict) -> bool:
 
 
 def prepare() -> bool:
+    name = Context.transaction_name
     for cohort in cohort_ports:
-        data = {"type": "temperature", "transaction": Context.transaction_name,
+        data = {"type": "temperature", "transaction": name,
                 "data": Context.active_transactions[cohort]}
         url = f"http://localhost:{cohort}/observe"
         response = requests.post(url, json=data, headers={'Accept': 'application/json',
                                                           'Content-Type': 'application/json'})
         if response.json()['result'] == 'no':
+            index = cohort_ports.index(cohort)
+            for i in range(0, index):
+                repo.log(name, cohort, 'abort')
+            repo.log(name, 0, 'to-abort')
             return False
-        repo.log(Context.transaction_name, cohort, 'prepared')
-    return True
-
-
-def abort() -> bool:
-    transaction = Context.transaction_name
-    responses = {}
+        repo.log(name, cohort, 'prepared')
     for cohort in cohort_ports:
-        repo.log(transaction, cohort, 'abort')
-        # abort cohorts
-        url = f"http://localhost:{cohort}/abort/{transaction}"
-        responses[cohort] = requests.get(url)
-        repo.remove_log(transaction, cohort, 'abort')
+        repo.log(name, cohort, 'commit')
+    repo.log(name, 0, 'to-commit')
     return True
 
 
-def commit() -> bool:
-    transaction = Context.transaction_name
+def complete_transaction(action: string):
+    name = Context.transaction_name
     responses = {}
+    complete = True
     for cohort in cohort_ports:
-        repo.log(transaction, cohort, 'commit')
-        # abort cohorts
-        url = f"http://localhost:{cohort}/commit/{transaction}"
-        responses[cohort] = requests.get(url)
-        repo.remove_log(transaction, cohort, 'commit')
-    return True
+        try:
+            url = f"http://localhost:{cohort}/{action}/{name}"
+            responses[cohort] = requests.get(url)
+            repo.remove_log(name, cohort, action)
+        except Exception as e:
+            complete = False
+            continue
+    return complete
 
 
 if __name__ == '__main__':
-    # recovery actions
     app.run()

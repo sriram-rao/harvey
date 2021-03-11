@@ -1,12 +1,38 @@
 from flask import Flask, request
+import requests
+
 from pgRepo import PostgresRepo
 import string
 
 # cohort layer for two-phase commit
 
+
+def recover(port: int):
+    # if prepared, get status from coordinator
+    prepared_count = repo.get_prepared_count()
+    if prepared_count > 0:
+        # get my status
+        name, status = repo.get_last_status()
+        url = f"http://localhost:{coordinator}/status/{name}/{port}"
+        response = requests.get(url)
+        recovery_status = response.json()['status']
+        if recovery_status == 'complete':
+            return
+        if recovery_status == 'commit':
+            repo.recover_commit_prepared(name)
+            action = 'commit'
+        elif recovery_status == 'abort':
+            repo.recover_abort_prepared(name)
+            action = 'abort'
+        url = f"http://localhost:{coordinator}/register?action={action}&name={name}&cohort={port}"
+        requests.get(url)
+
+
 app = Flask(__name__)
 app.config.from_pyfile("config.py")
 repo = PostgresRepo(app.config.get('POSTGRES_PORT'))
+coordinator = app.config.get('COORDINATOR')
+recover(app.config.get('MY_PORT'))
 
 
 @app.route('/')
@@ -42,7 +68,4 @@ def abort(transaction: string):
 
 
 if __name__ == '__main__':
-    # add recovery tasks
-    # transaction_id = repo.get_transaction_id(transaction)
-    # repo.recover_commit_prepared(transaction)
     app.run()
