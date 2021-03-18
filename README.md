@@ -18,7 +18,8 @@ FLASK_DEBUG = 0
 ```python -m flask run -p PORT_NUMBER```
 
 ### Running multiple cohorts
-* Start the harvey-cohort application on different ports using the command above, with corresponding configurations in the ```config.py```.
+* Make copies of the harvey-cohort folders.
+* Start the harvey-cohort application on different ports using the command above, with corresponding configurations for each cohort in the corresponding ```config.py```. 
 * Modify the ```config.py``` of the harvey-main application to include the list of cohort ports.
 
 ### Firing requests
