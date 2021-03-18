@@ -7,19 +7,21 @@ import uuid
 
 # coordinator for two-phase commit
 
+app = Flask(__name__)
+app.config.from_pyfile("config.py")
+repo = PostgresRepo(app.config.get('POSTGRES_PORT'))
+cohort_ports = list(app.config.get('COHORT_PORTS'))
+
 def recover():
     transaction, status = repo.get_last_status()
     Context.transaction_name = transaction
     action = 'commit' if status == 'to-commit' else 'abort'
     if complete_transaction(action):
         repo.log(Context.transaction_name, 0, 'complete')
+        repo.remove_transaction(Context.transaction_name)
     Context.clear()
 
-app = Flask(__name__)
-app.config.from_pyfile("config.py")
 
-repo = PostgresRepo(app.config.get('POSTGRES_PORT'))
-cohort_ports = list(app.config.get('COHORT_PORTS'))
 recover()
 
 class Context:
@@ -60,6 +62,7 @@ def insert_observation():
     action = 'commit' if prepare() else 'abort'
     result = action if complete_transaction(action) else 'incomplete'
     repo.log(Context.transaction_name, 0, 'complete')
+    repo.remove_transaction(Context.transaction_name)
     Context.clear()
     return {'result': f"{result}"}
 

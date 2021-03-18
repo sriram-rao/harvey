@@ -46,17 +46,21 @@ class PostgresRepo:
 
     def remove_log(self, transaction: string, cohort: int, event: string) -> bool:
         command = f"DELETE FROM transactionlog WHERE transaction = '{transaction}' " \
-                  f"AND cohort = {cohort} AND message = '{event}'"
+                  f"AND cohort = {cohort} AND message = '{event}';"
+        return self.execute(command) > 0
+
+    def remove_transaction(self, transaction: string) -> bool:
+        command = f"DELETE FROM transactionlog WHERE transaction = '{transaction}';"
         return self.execute(command) > 0
 
     def get_last_status(self) -> (string, string):
-        query = f"SELECT transaction, message FROM transactionlog WHERE cohort = 0 ORDER BY eventtime DESC LIMIT 1"
+        query = f"SELECT transaction, message FROM transactionlog WHERE cohort = 0 ORDER BY eventtime DESC LIMIT 1;"
         row, count = self.fetch_entity(query)
         return row[0], row[1]
 
     def get_status(self, transaction: string, cohort: int) -> string:
         query = f"SELECT message FROM transactionlog WHERE transaction = '{transaction}' AND cohort = {cohort} " \
-                f"ORDER BY eventtime DESC LIMIT 1"
+                f"ORDER BY eventtime DESC LIMIT 1;"
         row, count = self.fetch_entity(query)
         if count == 0:
             return 'complete'
