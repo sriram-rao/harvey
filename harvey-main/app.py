@@ -12,17 +12,6 @@ app.config.from_pyfile("config.py")
 repo = PostgresRepo(app.config.get('POSTGRES_PORT'))
 cohort_ports = list(app.config.get('COHORT_PORTS'))
 
-def recover():
-    transaction, status = repo.get_last_status()
-    Context.transaction_name = transaction
-    action = 'commit' if status == 'to-commit' else 'abort'
-    if complete_transaction(action):
-        repo.log(Context.transaction_name, 0, 'complete')
-        repo.remove_transaction(Context.transaction_name)
-    Context.clear()
-
-
-recover()
 
 class Context:
     active_count = 0
@@ -35,6 +24,34 @@ class Context:
         Context.active_transactions = {}
         Context.active_count = 0
         Context.transaction_name = ''
+
+
+def complete_transaction(action: string):
+    name = Context.transaction_name
+    responses = {}
+    complete = True
+    for cohort in cohort_ports:
+        try:
+            url = f"http://localhost:{cohort}/{action}/{name}"
+            responses[cohort] = requests.get(url)
+            repo.remove_log(name, cohort, action)
+        except Exception as e:
+            complete = False
+            continue
+    return complete
+
+
+def recover():
+    transaction, status = repo.get_last_status()
+    Context.transaction_name = transaction
+    action = 'commit' if status == 'to-commit' else 'abort'
+    if complete_transaction(action):
+        repo.log(Context.transaction_name, 0, 'complete')
+        repo.remove_transaction(Context.transaction_name)
+    Context.clear()
+
+
+recover()
 
 
 @app.route('/')
@@ -118,21 +135,6 @@ def prepare() -> bool:
         repo.log(name, cohort, 'commit')
     repo.log(name, 0, 'to-commit')
     return True
-
-
-def complete_transaction(action: string):
-    name = Context.transaction_name
-    responses = {}
-    complete = True
-    for cohort in cohort_ports:
-        try:
-            url = f"http://localhost:{cohort}/{action}/{name}"
-            responses[cohort] = requests.get(url)
-            repo.remove_log(name, cohort, action)
-        except Exception as e:
-            complete = False
-            continue
-    return complete
 
 
 if __name__ == '__main__':

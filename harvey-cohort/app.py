@@ -50,6 +50,11 @@ def insert_observation():
         repo.observe(sensor_type, params['transaction'], data)
         return {'result': 'yes'}
     except Exception:
+        try:
+            repo.abort_prepared()
+            repo.log(params['transaction'], "abort")
+        except Exception:
+            pass
         return {'result': 'no'}
 
 
